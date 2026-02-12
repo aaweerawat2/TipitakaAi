@@ -41,19 +41,53 @@ jobs:
       uses: actions/setup-node@v4
       with:
         node-version: '20'
+        cache: 'npm'
 
     - name: Setup Java
       uses: actions/setup-java@v4
       with:
         distribution: 'temurin'
         java-version: '17'
+        cache: 'gradle'
 
     - name: Setup Android SDK
       uses: android-actions/setup-android@v3
 
+    - name: Cache Gradle
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.gradle/caches
+          ~/.gradle/wrapper
+        key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+        restore-keys: |
+          ${{ runner.os }}-gradle-
+
+    - name: Cache Node Modules
+      id: cache-node-modules
+      uses: actions/cache@v4
+      with:
+        path: |
+          build-project/node_modules
+        key: ${{ runner.os }}-node-modules-${{ hashFiles('**/package-lock.json') }}
+        restore-keys: |
+          ${{ runner.os }}-node-modules-
+
+    - name: Cache Android Build
+      uses: actions/cache@v4
+      with:
+        path: |
+          build-project/android/.gradle
+          build-project/android/app/build
+        key: ${{ runner.os }}-android-build-${{ github.sha }}
+        restore-keys: |
+          ${{ runner.os }}-android-build-
+
     - name: Create React Native project
       run: |
-        npx @react-native-community/cli@latest init TipitakaAI --directory build-project --skip-git-init --pm npm --skip-install
+        if [ ! -d "build-project" ]; then
+          npx @react-native-community/cli@latest init TipitakaAI --directory build-project --skip-git-init --pm npm --skip-install
+        fi
 
     - name: Install dependencies in build project
       working-directory: build-project
@@ -83,7 +117,9 @@ jobs:
     - name: Generate Release Keystore
       run: |
         cd build-project/android/app
-        keytool -genkey -v -keystore release.keystore -alias release -keyalg RSA -keysize 2048 -validity 10000 -storepass tripitaka2024 -keypass tripitaka2024 -dname "CN=TipitakaAI, O=TipitakaAI, C=TH"
+        if [ ! -f "release.keystore" ]; then
+          keytool -genkey -v -keystore release.keystore -alias release -keyalg RSA -keysize 2048 -validity 10000 -storepass tripitaka2024 -keypass tripitaka2024 -dname "CN=TipitakaAI, O=TipitakaAI, C=TH"
+        fi
 
     - name: Configure Release Signing
       run: |
@@ -101,8 +137,9 @@ jobs:
         sed -i "s/versionCode 1/versionCode ${{ env.VERSION_CODE }}/" build.gradle
         sed -i "s/versionName \"1.0\"/versionName \"${{ env.VERSION_NAME }}\"/" build.gradle
         
-        # Add signing config
-        cat >> build.gradle << 'GRADLE_EOF'
+        # Check if signing config already exists
+        if ! grep -q "signingConfigs" build.gradle; then
+          cat >> build.gradle << 'GRADLE_EOF'
         
         android {
             signingConfigs {
@@ -123,16 +160,17 @@ jobs:
             }
         }
         GRADLE_EOF
+        fi
 
     - name: Build Release APK
       if: env.BUILD_TYPE == 'release'
       working-directory: build-project/android
-      run: ./gradlew assembleRelease --no-daemon
+      run: ./gradlew assembleRelease --no-daemon --build-cache
 
     - name: Build Debug APK
       if: env.BUILD_TYPE == 'debug'
       working-directory: build-project/android
-      run: ./gradlew assembleDebug --no-daemon
+      run: ./gradlew assembleDebug --no-daemon --build-cache
 
     - name: Rename and prepare APK
       run: |
@@ -163,7 +201,7 @@ jobs:
       if: env.BUILD_TYPE == 'release'
       uses: softprops/action-gh-release@v1
       with:
-        token: ${{ secrets.GH_TOKEN }}
+        token: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
         tag_name: v${{ env.VERSION_NAME }}
         name: TipitakaAI v${{ env.VERSION_NAME }}
         body: |
