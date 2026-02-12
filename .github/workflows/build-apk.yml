@@ -41,7 +41,6 @@ jobs:
       uses: actions/setup-node@v4
       with:
         node-version: '20'
-        cache: 'npm'
 
     - name: Setup Java
       uses: actions/setup-java@v4
@@ -53,35 +52,27 @@ jobs:
     - name: Setup Android SDK
       uses: android-actions/setup-android@v3
 
-    - name: Cache Gradle
+    - name: Cache Gradle Dependencies
       uses: actions/cache@v4
       with:
         path: |
           ~/.gradle/caches
           ~/.gradle/wrapper
-        key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          ~/.android/cache
+        key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*') }}-v2
         restore-keys: |
-          ${{ runner.os }}-gradle-
+          ${{ runner.os }}-gradle-v2
 
-    - name: Cache Node Modules
-      id: cache-node-modules
+    - name: Cache RN Project
+      id: cache-rn-project
       uses: actions/cache@v4
       with:
         path: |
           build-project/node_modules
-        key: ${{ runner.os }}-node-modules-${{ hashFiles('**/package-lock.json') }}
-        restore-keys: |
-          ${{ runner.os }}-node-modules-
-
-    - name: Cache Android Build
-      uses: actions/cache@v4
-      with:
-        path: |
           build-project/android/.gradle
-          build-project/android/app/build
-        key: ${{ runner.os }}-android-build-${{ github.sha }}
+        key: ${{ runner.os }}-rn-project-v1
         restore-keys: |
-          ${{ runner.os }}-android-build-
+          ${{ runner.os }}-rn-project-v1
 
     - name: Create React Native project
       run: |
@@ -89,11 +80,13 @@ jobs:
           npx @react-native-community/cli@latest init TipitakaAI --directory build-project --skip-git-init --pm npm --skip-install
         fi
 
-    - name: Install dependencies in build project
+    - name: Install dependencies
       working-directory: build-project
       run: |
-        npm install --legacy-peer-deps
-        npm install react-native-screens react-native-safe-area-context react-native-svg @react-navigation/native @react-navigation/native-stack @react-navigation/bottom-tabs zustand --legacy-peer-deps
+        if [ ! -d "node_modules" ]; then
+          npm install --legacy-peer-deps
+          npm install react-native-screens react-native-safe-area-context react-native-svg @react-navigation/native @react-navigation/native-stack @react-navigation/bottom-tabs zustand --legacy-peer-deps
+        fi
 
     - name: Copy source code
       run: |
@@ -103,7 +96,7 @@ jobs:
         cp tsconfig.json build-project/
         cp metro.config.js build-project/
 
-    - name: Update version in app.json
+    - name: Update version
       run: |
         cd build-project
         cat > app.json << EOF
@@ -114,14 +107,14 @@ jobs:
         }
         EOF
 
-    - name: Generate Release Keystore
+    - name: Generate Keystore
       run: |
         cd build-project/android/app
         if [ ! -f "release.keystore" ]; then
           keytool -genkey -v -keystore release.keystore -alias release -keyalg RSA -keysize 2048 -validity 10000 -storepass tripitaka2024 -keypass tripitaka2024 -dname "CN=TipitakaAI, O=TipitakaAI, C=TH"
         fi
 
-    - name: Configure Release Signing
+    - name: Configure Signing
       run: |
         cd build-project/android
         echo "MYAPP_UPLOAD_STORE_FILE=release.keystore" >> gradle.properties
@@ -129,15 +122,12 @@ jobs:
         echo "MYAPP_UPLOAD_KEY_ALIAS=release" >> gradle.properties
         echo "MYAPP_UPLOAD_KEY_PASSWORD=tripitaka2024" >> gradle.properties
 
-    - name: Update build.gradle with version and signing
+    - name: Update build.gradle
       run: |
         cd build-project/android/app
-        
-        # Update version
         sed -i "s/versionCode 1/versionCode ${{ env.VERSION_CODE }}/" build.gradle
         sed -i "s/versionName \"1.0\"/versionName \"${{ env.VERSION_NAME }}\"/" build.gradle
         
-        # Check if signing config already exists
         if ! grep -q "signingConfigs" build.gradle; then
           cat >> build.gradle << 'GRADLE_EOF'
         
@@ -172,24 +162,14 @@ jobs:
       working-directory: build-project/android
       run: ./gradlew assembleDebug --no-daemon --build-cache
 
-    - name: Rename and prepare APK
+    - name: Rename APK
       run: |
         if [ "${{ env.BUILD_TYPE }}" = "release" ]; then
           mv build-project/android/app/build/outputs/apk/release/app-release.apk build-project/TipitakaAI-v${{ env.VERSION_NAME }}.apk
         else
           mv build-project/android/app/build/outputs/apk/debug/app-debug.apk build-project/TipitakaAI-v${{ env.VERSION_NAME }}-debug.apk
         fi
-
-    - name: Get APK Info
-      run: |
-        cd build-project
-        ls -lh *.apk
-        echo "---"
-        echo "APK: $(ls *.apk)"
-        echo "Size: $(du -h *.apk | cut -f1)"
-        echo "Version: ${{ env.VERSION_NAME }}"
-        echo "Version Code: ${{ env.VERSION_CODE }}"
-        echo "Build Type: ${{ env.BUILD_TYPE }}"
+        ls -lh build-project/*.apk
 
     - name: Upload APK
       uses: actions/upload-artifact@v4
@@ -207,21 +187,13 @@ jobs:
         body: |
           # พระไตรปิฎก AI v${{ env.VERSION_NAME }}
           
-          ## ข้อมูลเวอร์ชัน
-          - **Version:** ${{ env.VERSION_NAME }}
-          - **Version Code:** ${{ env.VERSION_CODE }}
-          - **Build Type:** Release
-          
           ## การติดตั้ง
           1. ดาวน์โหลดไฟล์ APK
           2. เปิดไฟล์และกด Install
-          3. หากถาม อนุญาต "ติดตั้งจากแหล่งที่ไม่รู้จัก"
-          4. เปิดแอปใช้งานได้เลย
+          3. เปิดแอปใช้งานได้เลย
           
           ## คุณสมบัติ
           - อ่านพระไตรปิฎกภาษาไทย
           - AI ถาม-ตอบ (ต้องดาวน์โหลด AI Models)
           - รองรับ QNN acceleration
         files: build-project/*.apk
-        draft: false
-        prerelease: false
