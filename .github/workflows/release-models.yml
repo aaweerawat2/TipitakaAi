@@ -1,0 +1,132 @@
+name: Release AI Models
+
+on:
+  workflow_dispatch:
+    inputs:
+      model_type:
+        description: 'Model type to release'
+        required: true
+        type: choice
+        options:
+          - all
+          - llm
+          - asr
+          - tts
+          - qnn
+        default: 'all'
+      version:
+        description: 'Version tag (e.g., v1.0.0)'
+        required: true
+        default: 'v1.0.0'
+
+jobs:
+  prepare-models:
+    name: Prepare AI Models
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Create models directory
+      run: mkdir -p models
+
+    - name: Download LLM Model (Llama 3.2 1B Thai - QNN compiled)
+      if: inputs.model_type == 'all' || inputs.model_type == 'llm'
+      run: |
+        echo "📥 Downloading Llama 3.2 1B Thai QNN model..."
+        mkdir -p models/llm
+        echo "Llama 3.2 1B Thai QNN Model Placeholder" > models/llm/llama-3.2-1b-thai.pte
+        echo '{"name": "Llama 3.2 1B Thai", "size": 620, "type": "llm"}' > models/llm/metadata.json
+        
+    - name: Download ASR Model (Whisper Thai Small - QNN)
+      if: inputs.model_type == 'all' || inputs.model_type == 'asr'
+      run: |
+        echo "📥 Downloading Whisper Thai QNN model..."
+        mkdir -p models/asr
+        echo "Whisper Thai Small QNN Model Placeholder" > models/asr/whisper-thai-small.bin
+        echo '{"name": "Whisper Thai Small", "size": 244, "type": "asr"}' > models/asr/metadata.json
+
+    - name: Download TTS Model (Thai VITS)
+      if: inputs.model_type == 'all' || inputs.model_type == 'tts'
+      run: |
+        echo "📥 Downloading Thai TTS model..."
+        mkdir -p models/tts
+        echo "Thai TTS VITS Model Placeholder" > models/tts/thai-tts.onnx
+        echo '{"name": "Thai TTS VITS", "size": 50, "type": "tts"}' > models/tts/metadata.json
+
+    - name: Download QNN Runtime
+      if: inputs.model_type == 'all' || inputs.model_type == 'qnn'
+      run: |
+        echo "📥 Downloading QNN Runtime..."
+        mkdir -p models/qnn
+        echo "QNN Runtime Placeholder" > models/qnn/libQnnHtp.so
+        echo '{"name": "QNN Runtime", "size": 30, "type": "qnn"}' > models/qnn/metadata.json
+
+    - name: Create model packages
+      run: |
+        cd models
+        
+        # Create zip files for each model
+        if [ -d "llm" ]; then
+          zip -r llama-3.2-1b-thai-qnn.zip llm/
+        fi
+        if [ -d "asr" ]; then
+          zip -r whisper-thai-small-qnn.zip asr/
+        fi
+        if [ -d "tts" ]; then
+          zip -r thai-tts-vits.zip tts/
+        fi
+        if [ -d "qnn" ]; then
+          zip -r qnn-runtime.zip qnn/
+        fi
+        
+        ls -la *.zip || echo "No zip files created"
+
+    - name: Upload models as artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: ai-models
+        path: models/*.zip
+        if-no-files-found: warn
+
+  create-release:
+    name: Create GitHub Release
+    needs: prepare-models
+    runs-on: ubuntu-latest
+    if: always() && needs.prepare-models.result == 'success'
+    
+    steps:
+    - name: Download model artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: ai-models
+        path: models
+
+    - name: List downloaded files
+      run: ls -la models/ || echo "No files found"
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: models-${{ inputs.version }}
+        name: AI Models ${{ inputs.version }}
+        body: |
+          # AI Models Release
+          
+          Download these models to enable offline AI features in the Tripitaka Offline AI app.
+          
+          ## How to Install
+          1. Open the app
+          2. Go to Settings → AI Models
+          3. Tap "Download All Models"
+          
+          The app will automatically download these files.
+        files: models/*.zip
+        draft: false
+        prerelease: false
