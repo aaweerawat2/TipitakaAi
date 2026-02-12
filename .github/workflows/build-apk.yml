@@ -4,10 +4,27 @@ on:
   push:
     branches: [ main, master ]
   workflow_dispatch:
+    inputs:
+      version_name:
+        description: 'Version name (e.g., 1.0.0)'
+        required: true
+        default: '1.0.0'
+      version_code:
+        description: 'Version code (integer)'
+        required: true
+        default: '1'
+      build_type:
+        description: 'Build type'
+        required: true
+        type: choice
+        options:
+          - release
+          - debug
+        default: 'release'
 
 jobs:
   build:
-    name: Build Release APK
+    name: Build ${{ inputs.build_type }} APK v${{ inputs.version_name }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
 
@@ -47,10 +64,21 @@ jobs:
         cp tsconfig.json build-project/
         cp metro.config.js build-project/
 
+    - name: Update version in app.json
+      run: |
+        cd build-project
+        cat > app.json << EOF
+        {
+          "name": "TipitakaAI",
+          "displayName": "พระไตรปิฎก AI",
+          "version": "${{ inputs.version_name }}"
+        }
+        EOF
+
     - name: Generate Release Keystore
       run: |
         cd build-project/android/app
-        keytool -genkey -v -keystore release.keystore -alias release -keyalg RSA -keysize 2048 -validity 10000 -storepass tripitaka2024 -keypass tripitaka2024 -dname "CN=TripitakaAI, O=TripitakaAI, C=TH"
+        keytool -genkey -v -keystore release.keystore -alias release -keyalg RSA -keysize 2048 -validity 10000 -storepass tripitaka2024 -keypass tripitaka2024 -dname "CN=TipitakaAI, O=TripitakaAI, C=TH"
 
     - name: Configure Release Signing
       run: |
@@ -60,10 +88,16 @@ jobs:
         echo "MYAPP_UPLOAD_KEY_ALIAS=release" >> gradle.properties
         echo "MYAPP_UPLOAD_KEY_PASSWORD=tripitaka2024" >> gradle.properties
 
-    - name: Update build.gradle for Release
+    - name: Update build.gradle with version and signing
       run: |
         cd build-project/android/app
-        cat >> build.gradle << 'EOF'
+        
+        # Update version
+        sed -i "s/versionCode 1/versionCode ${{ inputs.version_code }}/" build.gradle
+        sed -i "s/versionName \"1.0\"/versionName \"${{ inputs.version_name }}\"/" build.gradle
+        
+        # Add signing config
+        cat >> build.gradle << 'GRADLE_EOF'
         
         android {
             signingConfigs {
@@ -83,23 +117,67 @@ jobs:
                 }
             }
         }
-        EOF
+        GRADLE_EOF
 
     - name: Build Release APK
+      if: inputs.build_type == 'release'
       working-directory: build-project/android
       run: ./gradlew assembleRelease --no-daemon
 
-    - name: Rename APK
-      run: |
-        mv build-project/android/app/build/outputs/apk/release/app-release.apk build-project/android/app/build/outputs/apk/release/TipitakaAI-v1.0.0.apk
+    - name: Build Debug APK
+      if: inputs.build_type == 'debug'
+      working-directory: build-project/android
+      run: ./gradlew assembleDebug --no-daemon
 
-    - name: Upload Release APK
-      uses: actions/upload-artifact@v4
-      with:
-        name: TipitakaAI-Release
-        path: build-project/android/app/build/outputs/apk/release/TipitakaAI-v1.0.0.apk
+    - name: Rename and prepare APK
+      run: |
+        if [ "${{ inputs.build_type }}" = "release" ]; then
+          mv build-project/android/app/build/outputs/apk/release/app-release.apk build-project/TipitakaAI-v${{ inputs.version_name }}.apk
+        else
+          mv build-project/android/app/build/outputs/apk/debug/app-debug.apk build-project/TipitakaAI-v${{ inputs.version_name }}-debug.apk
+        fi
 
     - name: Get APK Info
       run: |
-        ls -lh build-project/android/app/build/outputs/apk/release/
-        echo "APK Size: $(du -h build-project/android/app/build/outputs/apk/release/TipitakaAI-v1.0.0.apk | cut -f1)"
+        cd build-project
+        ls -lh *.apk
+        echo "---"
+        echo "APK: $(ls *.apk)"
+        echo "Size: $(du -h *.apk | cut -f1)"
+        echo "Version: ${{ inputs.version_name }}"
+        echo "Version Code: ${{ inputs.version_code }}"
+        echo "Build Type: ${{ inputs.build_type }}"
+
+    - name: Upload APK
+      uses: actions/upload-artifact@v4
+      with:
+        name: TipitakaAI-v${{ inputs.version_name }}-${{ inputs.build_type }}
+        path: build-project/*.apk
+
+    - name: Create Release
+      if: inputs.build_type == 'release'
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: v${{ inputs.version_name }}
+        name: TipitakaAI v${{ inputs.version_name }}
+        body: |
+          # พระไตรปิฎก AI v${{ inputs.version_name }}
+          
+          ## ข้อมูลเวอร์ชัน
+          - **Version:** ${{ inputs.version_name }}
+          - **Version Code:** ${{ inputs.version_code }}
+          - **Build Type:** Release
+          
+          ## การติดตั้ง
+          1. ดาวน์โหลดไฟล์ APK
+          2. เปิดไฟล์และกด Install
+          3. หากถาม อนุญาต "ติดตั้งจากแหล่งที่ไม่รู้จัก"
+          4. เปิดแอปใช้งานได้เลย
+          
+          ## คุณสมบัติ
+          - อ่านพระไตรปิฎกภาษาไทย
+          - AI ถาม-ตอบ (ต้องดาวน์โหลด AI Models)
+          - รองรับ QNN acceleration
+        files: build-project/*.apk
+        draft: false
+        prerelease: false
