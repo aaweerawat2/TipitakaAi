@@ -1,0 +1,105 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Release APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+
+    - name: Setup Java
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'temurin'
+        java-version: '17'
+
+    - name: Setup Android SDK
+      uses: android-actions/setup-android@v3
+
+    - name: Create React Native project
+      run: |
+        npx @react-native-community/cli@latest init TipitakaAI --directory build-project --skip-git-init --pm npm --skip-install
+
+    - name: Install dependencies in build project
+      working-directory: build-project
+      run: |
+        npm install --legacy-peer-deps
+        npm install react-native-screens react-native-safe-area-context react-native-svg @react-navigation/native @react-navigation/native-stack @react-navigation/bottom-tabs zustand --legacy-peer-deps
+
+    - name: Copy source code
+      run: |
+        cp App.tsx build-project/App.tsx
+        cp -r src build-project/
+        cp babel.config.js build-project/
+        cp tsconfig.json build-project/
+        cp metro.config.js build-project/
+
+    - name: Generate Release Keystore
+      run: |
+        cd build-project/android/app
+        keytool -genkey -v -keystore release.keystore -alias release -keyalg RSA -keysize 2048 -validity 10000 -storepass tripitaka2024 -keypass tripitaka2024 -dname "CN=TripitakaAI, O=TripitakaAI, C=TH"
+
+    - name: Configure Release Signing
+      run: |
+        cd build-project/android
+        echo "MYAPP_UPLOAD_STORE_FILE=release.keystore" >> gradle.properties
+        echo "MYAPP_UPLOAD_STORE_PASSWORD=tripitaka2024" >> gradle.properties
+        echo "MYAPP_UPLOAD_KEY_ALIAS=release" >> gradle.properties
+        echo "MYAPP_UPLOAD_KEY_PASSWORD=tripitaka2024" >> gradle.properties
+
+    - name: Update build.gradle for Release
+      run: |
+        cd build-project/android/app
+        cat >> build.gradle << 'EOF'
+        
+        android {
+            signingConfigs {
+                release {
+                    storeFile file('release.keystore')
+                    storePassword 'tripitaka2024'
+                    keyAlias 'release'
+                    keyPassword 'tripitaka2024'
+                }
+            }
+            buildTypes {
+                release {
+                    signingConfig signingConfigs.release
+                    minifyEnabled true
+                    shrinkResources true
+                    proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
+                }
+            }
+        }
+        EOF
+
+    - name: Build Release APK
+      working-directory: build-project/android
+      run: ./gradlew assembleRelease --no-daemon
+
+    - name: Rename APK
+      run: |
+        mv build-project/android/app/build/outputs/apk/release/app-release.apk build-project/android/app/build/outputs/apk/release/TipitakaAI-v1.0.0.apk
+
+    - name: Upload Release APK
+      uses: actions/upload-artifact@v4
+      with:
+        name: TipitakaAI-Release
+        path: build-project/android/app/build/outputs/apk/release/TipitakaAI-v1.0.0.apk
+
+    - name: Get APK Info
+      run: |
+        ls -lh build-project/android/app/build/outputs/apk/release/
+        echo "APK Size: $(du -h build-project/android/app/build/outputs/apk/release/TipitakaAI-v1.0.0.apk | cut -f1)"
