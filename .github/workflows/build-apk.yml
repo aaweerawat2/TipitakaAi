@@ -51,62 +51,41 @@ jobs:
     - name: Setup Android SDK
       uses: android-actions/setup-android@v3
 
-    - name: Cache Gradle Dependencies
+    - name: Cache Gradle
       uses: actions/cache@v4
       with:
         path: |
           ~/.gradle/caches
           ~/.gradle/wrapper
-        key: ${{ runner.os }}-gradle-global-v2
-        restore-keys: |
-          ${{ runner.os }}-gradle-global-
+          android/.gradle
+        key: gradle-${{ runner.os }}-v1
+        restore-keys: gradle-${{ runner.os }}-
 
-    - name: Cache RN Project
+    - name: Cache node_modules
       uses: actions/cache@v4
       with:
-        path: |
-          build-project/node_modules
-          build-project/android/.gradle
-        key: ${{ runner.os }}-rn-project-v4
-        restore-keys: |
-          ${{ runner.os }}-rn-project-
+        path: node_modules
+        key: node-modules-${{ runner.os }}-${{ hashFiles('package.json') }}
+        restore-keys: node-modules-${{ runner.os }}-
 
-    - name: Create React Native project
-      run: |
-        if [ ! -d "build-project" ]; then
-          npx @react-native-community/cli@latest init TipitakaAI --directory build-project --skip-git-init --pm npm --skip-install
-        fi
+    - name: Install bun
+      run: npm install -g bun
 
     - name: Install dependencies
-      working-directory: build-project
-      run: |
-        npm install --legacy-peer-deps
-        npm install react-native-screens react-native-safe-area-context react-native-svg @react-navigation/native @react-navigation/native-stack @react-navigation/bottom-tabs zustand lucide-react-native --legacy-peer-deps
+      run: bun install || npm install --legacy-peer-deps
 
-    - name: Copy source code
-      run: |
-        cp App.tsx build-project/App.tsx
-        cp -r src build-project/
-        cp babel.config.js build-project/
-        cp tsconfig.json build-project/
-        cp metro.config.js build-project/
-
-    - name: Update version
-      run: |
-        cd build-project
-        cat > app.json << EOF
-        {
-          "name": "TipitakaAI",
-          "displayName": "พระไตรปิฎก AI",
-          "version": "${{ env.VERSION_NAME }}"
-        }
-        EOF
+    - name: Make gradlew executable
+      run: chmod +x android/gradlew
 
     - name: Create assets directory
-      run: mkdir -p build-project/android/app/src/main/assets
+      run: mkdir -p android/app/src/main/assets
 
-    - name: Bundle JavaScript for Android
-      working-directory: build-project
+    - name: Update version in build.gradle
+      run: |
+        sed -i "s/versionCode [0-9]*/versionCode ${{ env.VERSION_CODE }}/" android/app/build.gradle
+        sed -i "s/versionName \"[^\"]*\"/versionName \"${{ env.VERSION_NAME }}\"/" android/app/build.gradle
+
+    - name: Bundle JavaScript for Release
       run: |
         npx react-native bundle \
           --platform android \
@@ -115,75 +94,32 @@ jobs:
           --bundle-output android/app/src/main/assets/index.android.bundle \
           --assets-dest android/app/src/main/res
 
-    - name: Generate Keystore
-      run: |
-        cd build-project/android/app
-        if [ ! -f "release.keystore" ]; then
-          keytool -genkey -v -keystore release.keystore -alias release -keyalg RSA -keysize 2048 -validity 10000 -storepass tripitaka2024 -keypass tripitaka2024 -dname "CN=TipitakaAI, O=TipitakaAI, C=TH"
-        fi
-
-    - name: Configure Signing
-      run: |
-        cd build-project/android
-        echo "MYAPP_UPLOAD_STORE_FILE=release.keystore" >> gradle.properties
-        echo "MYAPP_UPLOAD_STORE_PASSWORD=tripitaka2024" >> gradle.properties
-        echo "MYAPP_UPLOAD_KEY_ALIAS=release" >> gradle.properties
-        echo "MYAPP_UPLOAD_KEY_PASSWORD=tripitaka2024" >> gradle.properties
-
-    - name: Update build.gradle
-      run: |
-        cd build-project/android/app
-        sed -i "s/versionCode 1/versionCode ${{ env.VERSION_CODE }}/" build.gradle
-        sed -i "s/versionName \"1.0\"/versionName \"${{ env.VERSION_NAME }}\"/" build.gradle
-
-        if ! grep -q "signingConfigs" build.gradle; then
-          cat >> build.gradle << 'GRADLE_EOF'
-
-        android {
-            signingConfigs {
-                release {
-                    storeFile file('release.keystore')
-                    storePassword 'tripitaka2024'
-                    keyAlias 'release'
-                    keyPassword 'tripitaka2024'
-                }
-            }
-            buildTypes {
-                release {
-                    signingConfig signingConfigs.release
-                    minifyEnabled true
-                    shrinkResources true
-                    proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
-                }
-            }
-        }
-        GRADLE_EOF
-        fi
-
     - name: Build Release APK
       if: env.BUILD_TYPE == 'release'
-      working-directory: build-project/android
-      run: ./gradlew assembleRelease --no-daemon --build-cache
+      run: |
+        cd android
+        ./gradlew assembleRelease --no-daemon
 
     - name: Build Debug APK
       if: env.BUILD_TYPE == 'debug'
-      working-directory: build-project/android
-      run: ./gradlew assembleDebug --no-daemon --build-cache
+      run: |
+        cd android
+        ./gradlew assembleDebug --no-daemon
 
     - name: Rename APK
       run: |
         if [ "${{ env.BUILD_TYPE }}" = "release" ]; then
-          mv build-project/android/app/build/outputs/apk/release/app-release.apk build-project/TipitakaAI-v${{ env.VERSION_NAME }}.apk
+          mv android/app/build/outputs/apk/release/app-release.apk TipitakaAI-v${{ env.VERSION_NAME }}.apk
         else
-          mv build-project/android/app/build/outputs/apk/debug/app-debug.apk build-project/TipitakaAI-v${{ env.VERSION_NAME }}-debug.apk
+          mv android/app/build/outputs/apk/debug/app-debug.apk TipitakaAI-v${{ env.VERSION_NAME }}-debug.apk
         fi
-        ls -lh build-project/*.apk
+        ls -lh *.apk
 
     - name: Upload APK
       uses: actions/upload-artifact@v4
       with:
         name: TipitakaAI-v${{ env.VERSION_NAME }}-${{ env.BUILD_TYPE }}
-        path: build-project/*.apk
+        path: TipitakaAI-v${{ env.VERSION_NAME }}*.apk
 
     - name: Create Release
       if: env.BUILD_TYPE == 'release'
@@ -204,4 +140,4 @@ jobs:
           - อ่านพระไตรปิฎกภาษาไทย
           - AI ถาม-ตอบ (ต้องดาวน์โหลด AI Models)
           - รองรับ QNN acceleration
-        files: build-project/*.apk
+        files: TipitakaAI-v${{ env.VERSION_NAME }}*.apk
