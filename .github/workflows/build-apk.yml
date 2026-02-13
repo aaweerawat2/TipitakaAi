@@ -31,7 +31,7 @@ jobs:
   build:
     name: Build APK v${{ github.event.inputs.version_name || '1.0.0' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
 
     steps:
     - name: Checkout code
@@ -57,9 +57,9 @@ jobs:
         path: |
           ~/.gradle/caches
           ~/.gradle/wrapper
-        key: ${{ runner.os }}-gradle-global-v1
+        key: ${{ runner.os }}-gradle-global-v2
         restore-keys: |
-          ${{ runner.os }}-gradle-global-v1
+          ${{ runner.os }}-gradle-global-
 
     - name: Cache RN Project
       uses: actions/cache@v4
@@ -67,9 +67,9 @@ jobs:
         path: |
           build-project/node_modules
           build-project/android/.gradle
-        key: ${{ runner.os }}-rn-project-v3
+        key: ${{ runner.os }}-rn-project-v4
         restore-keys: |
-          ${{ runner.os }}-rn-project-v3
+          ${{ runner.os }}-rn-project-
 
     - name: Create React Native project
       run: |
@@ -102,6 +102,19 @@ jobs:
         }
         EOF
 
+    - name: Create assets directory
+      run: mkdir -p build-project/android/app/src/main/assets
+
+    - name: Bundle JavaScript for Android
+      working-directory: build-project
+      run: |
+        npx react-native bundle \
+          --platform android \
+          --dev false \
+          --entry-file index.js \
+          --bundle-output android/app/src/main/assets/index.android.bundle \
+          --assets-dest android/app/src/main/res
+
     - name: Generate Keystore
       run: |
         cd build-project/android/app
@@ -122,10 +135,10 @@ jobs:
         cd build-project/android/app
         sed -i "s/versionCode 1/versionCode ${{ env.VERSION_CODE }}/" build.gradle
         sed -i "s/versionName \"1.0\"/versionName \"${{ env.VERSION_NAME }}\"/" build.gradle
-        
+
         if ! grep -q "signingConfigs" build.gradle; then
           cat >> build.gradle << 'GRADLE_EOF'
-        
+
         android {
             signingConfigs {
                 release {
@@ -181,12 +194,12 @@ jobs:
         name: TipitakaAI v${{ env.VERSION_NAME }}
         body: |
           # พระไตรปิฎก AI v${{ env.VERSION_NAME }}
-          
+
           ## การติดตั้ง
           1. ดาวน์โหลดไฟล์ APK
           2. เปิดไฟล์และกด Install
           3. เปิดแอปใช้งานได้เลย
-          
+
           ## คุณสมบัติ
           - อ่านพระไตรปิฎกภาษาไทย
           - AI ถาม-ตอบ (ต้องดาวน์โหลด AI Models)
